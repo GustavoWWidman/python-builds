@@ -87,6 +87,23 @@ echo "${PYTHON_SHA256}  ${TARBALL}" | shasum -a 256 -c - \
 tar xf "${TARBALL}"
 cd "Python-${PYTHON_VERSION}"
 
+# --- Apply source patches (arm64 / macOS-11 support) --------------------------
+# CPython 3.6 predates Apple Silicon: a stock build fails at `configure`
+# ("Unexpected output of 'arch' on OSX") and later in ctypes/libffi, _decimal,
+# and pymalloc alignment. We apply the exact patch set pyenv's python-build uses
+# (vendored under patches/<version>/), in sorted order, before configure. A
+# failed patch aborts the build (set -e).
+PATCH_DIR="${SCRIPT_DIR}/../patches/${PYTHON_VERSION}"
+if [[ -d "${PATCH_DIR}" ]]; then
+  for p in "${PATCH_DIR}"/*.patch; do
+    [[ -f "${p}" ]] || continue
+    echo "--> applying $(basename "${p}")"
+    patch -p1 < "${p}"
+  done
+else
+  echo "WARN: no patches dir ${PATCH_DIR}; a from-source arm64 build of ${PYTHON_VERSION} will likely fail."
+fi
+
 # --- Refresh config.guess/config.sub for arm64 awareness ----------------------
 # 3.6's vendored copies predate aarch64-apple-darwin; without this, ./configure
 # bails with "cannot guess build type". Pull current copies from Homebrew's
