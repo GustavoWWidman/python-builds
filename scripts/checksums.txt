@@ -1,0 +1,20 @@
+# Known-good upstream SHA-256 checksums, in `sha256sum`-compatible format:
+#   <sha256>  <exact filename>
+#
+# The build scripts look up the expected checksum for the file they downloaded
+# by matching the filename in the first column of the line's SECOND field.
+# You can also override per-run via the OPENSSL_SHA256 / PYTHON_SHA256 env vars.
+#
+# IMPORTANT (honesty note): verify these values yourself before the first real
+# CI run. The OpenSSL value is the widely-published 1.1.1w release hash; the
+# Python value should be cross-checked against the md5/sigstore data on
+# https://www.python.org/downloads/release/python-3615/ . If you bump either
+# version input, you MUST add the new filename+hash line here (or pass the
+# matching *_SHA256 env var) or the build will fail closed.
+
+# OpenSSL 1.1.1w (openssl.org/source) — the last 1.1.1 release; required because
+# Python 3.6's _ssl/_hashlib are only ABI-correct against OpenSSL 1.1, not 3.x.
+cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8  openssl-1.1.1w.tar.gz
+
+# CPython 3.6.15 (python.org/ftp) — final 3.6 source release.
+6b23dd3f4b2d63c3543ad94d9b03ba37d68e0eeda347b0e83baed02d1a1e8f88  Python-3.6.15.tar.xz

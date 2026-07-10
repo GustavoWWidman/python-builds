@@ -1,0 +1,36 @@
+# python-build definition for mise's CORE `python` tool
+# =====================================================================
+# This makes the prebuilt tarball published by this repo selectable as a
+# *version* of mise's core `python` tool (pyenv/python-build under the hood),
+# NOT as a separate `http:` tool. `python@3.6.15` then coexists with the
+# precompiled 3.11 / 3.14 as ONE python tool.
+#
+# THE FILENAME IS THE VERSION STRING.
+#   python-build resolves `python@3.6.15` to a definition file literally named
+#   `3.6.15`. Rename this file and the version changes — keep them equal.
+#
+# "copy" BUILD MODE = NO COMPILE.
+#   `install_package ... "copy"` downloads the tarball and copies it in AS-IS
+#   (this is the GraalPy / prebuilt pattern). No ./configure, no make. The
+#   tarball root must contain bin/ lib/ ... directly, which our packaging step
+#   guarantees (tar -C <prefix> .).
+#
+# WHERE THIS MUST LIVE TO BE PICKED UP.
+#   The directory holding this file must be on PYTHON_BUILD_DEFINITIONS, and it
+#   must be OUTSIDE mise's cache (which `mise cache clear` wipes). Install with
+#   compile mode scoped to ONLY that one command (see README.md):
+#     MISE_PYTHON_COMPILE=1 \
+#     PYTHON_BUILD_DEFINITIONS=~/.config/mise/python-build-defs \
+#     mise install python@3.6.15
+#
+# PLACEHOLDERS to fill in after the first release exists:
+#   <OWNER>   GitHub org/user that hosts this python-builds repo.
+#   <SHA256>  sha256 of the tarball, taken from the release's `<asset>.sha256`
+#             sidecar (the `#<sha>` fragment makes python-build verify it).
+#
+# The URL + asset name below MUST match the workflow's published asset EXACTLY:
+#   tag    cpython-v3.6.15
+#   asset  cpython-3.6.15-aarch64-apple-darwin.tar.gz
+install_package "cpython-3.6.15-custom" \
+  "https://github.com/<OWNER>/python-builds/releases/download/cpython-v3.6.15/cpython-3.6.15-aarch64-apple-darwin.tar.gz#<SHA256>" \
+  "copy"

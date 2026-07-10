@@ -1,0 +1,17 @@
+# Build + staging output (produced by CI, never committed)
+/build/
+/dist/
+
+# Downloaded sources / extracted trees
+*.tar.gz
+*.tar.xz
+*.sha256
+openssl-*/
+Python-*/
+
+# macOS cruft
+.DS_Store
+
+# Editor/OS scratch
+*.swp
+*~

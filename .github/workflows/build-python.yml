@@ -1,0 +1,105 @@
+name: build-python
+
+# Manually-triggered "foundry" build: compile a relocatable, native CPython for
+# an EOL version macOS runners no longer prebuild, then publish it as a Release.
+# See README.md for the WHY (OpenSSL 1.1 vs 3, brew removed openssl@1.1, etc.).
+
+on:
+  workflow_dispatch:
+    inputs:
+      python_version:
+        description: "CPython version to build (source must exist on python.org)"
+        required: true
+        default: "3.6.15"
+      openssl_version:
+        description: "OpenSSL 1.1.x version to build from source"
+        required: true
+        default: "1.1.1w"
+
+permissions:
+  contents: write # required by softprops/action-gh-release to create the Release
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # One native target today. Adding x86_64 later is a ONE-LINE addition:
+        # uncomment the macos-13 block below (macos-13 = x86_64, macos-14/15 = arm64).
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            openssl_arch: darwin64-arm64-cc
+          # - runner: macos-13
+          #   target: x86_64-apple-darwin
+          #   openssl_arch: darwin64-x86_64-cc
+
+    env:
+      PYTHON_VERSION: ${{ github.event.inputs.python_version }}
+      OPENSSL_VERSION: ${{ github.event.inputs.openssl_version }}
+      TARGET_TRIPLE: ${{ matrix.target }}
+      OPENSSL_ARCH: ${{ matrix.openssl_arch }}
+      # Staging + install prefixes live under the workspace so paths are stable
+      # across steps. OPENSSL_PREFIX is a STAGING prefix, separate from PY_PREFIX.
+      OPENSSL_PREFIX: ${{ github.workspace }}/build/openssl
+      PY_PREFIX: ${{ github.workspace }}/build/install
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install brew build deps (NOT openssl — that is built from source)
+        # bz2/readline/ncurses/xz/gdbm/libffi are fine from brew; only openssl@1.1
+        # is the trap (Homebrew removed it and 3.6 needs 1.1's ABI).
+        run: |
+          brew install zlib bzip2 xz readline ncurses gdbm libffi || true
+
+      - name: Build OpenSSL ${{ env.OPENSSL_VERSION }} from source
+        run: bash scripts/build-openssl.sh
+
+      - name: Build CPython ${{ env.PYTHON_VERSION }}
+        run: bash scripts/build-python.sh
+
+      - name: Relocate (make the tree portable)
+        run: bash scripts/relocate.sh
+
+      - name: Package tarball
+        id: package
+        run: |
+          set -euo pipefail
+          PKG="cpython-${PYTHON_VERSION}-${TARGET_TRIPLE}.tar.gz"
+          # Package from INSIDE the prefix so the tarball root is bin/ lib/ ...
+          # (selftest.sh and python-build's "copy" mode expect bin/ at top level).
+          tar -C "${PY_PREFIX}" -czf "${PKG}" .
+          shasum -a 256 "${PKG}" | tee "${PKG}.sha256"
+          echo "pkg=${PKG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Selftest (MUST pass before publishing)
+        env:
+          TARBALL: ${{ github.workspace }}/${{ steps.package.outputs.pkg }}
+          EXPECTED_VERSION: ${{ env.PYTHON_VERSION }}
+          EXPECTED_OPENSSL: OpenSSL ${{ env.OPENSSL_VERSION }}
+        run: bash scripts/selftest.sh
+
+      - name: Publish GitHub Release
+        # Supply-chain hardening: pin to a full 40-char commit SHA, not a moving
+        # tag. REPLACE <PIN-TO-SHA> with the real commit SHA of softprops/
+        # action-gh-release v2.x.x (find it on the action's GitHub releases page)
+        # before running; the trailing comment documents which version it is.
+        uses: softprops/action-gh-release@<PIN-TO-SHA> # v2.x.x
+        with:
+          # Tag scheme: cpython-v<python_version> (documented in README.md).
+          # Each target's tarball is attached to the same version tag.
+          tag_name: cpython-v${{ env.PYTHON_VERSION }}
+          name: CPython ${{ env.PYTHON_VERSION }}
+          body: |
+            Relocatable native CPython ${{ env.PYTHON_VERSION }} for `${{ env.TARGET_TRIPLE }}`,
+            built against OpenSSL ${{ env.OPENSSL_VERSION }} (from source).
+            Consume as a mise core `python` version via a python-build definition
+            (`"copy"` mode) — see README.md.
+          files: |
+            ${{ steps.package.outputs.pkg }}
+            ${{ steps.package.outputs.pkg }}.sha256

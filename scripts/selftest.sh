@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# selftest.sh — prove the packaged tarball is relocatable AND that TLS actually
+#               works, BEFORE we publish a GitHub Release. Any failure exits
+#               non-zero so CI blocks the release step.
+#
+# WHY EXTRACT TO A DIFFERENT PATH:
+#   The whole point of relocate.sh is that the dist works somewhere other than
+#   where it was built. We extract into a fresh temp dir that has NOTHING to do
+#   with PY_PREFIX, then run the interpreter from there. If any dylib reference
+#   still pointed at an absolute build path, `import ssl` would fail here.
+#
+# THE TLS CHECKS ARE THE REASON THIS PROJECT EXISTS:
+#   Against OpenSSL 3, Python 3.6's _ssl compiles but getpeercert() returns
+#   empty and verification silently breaks. So we don't just import ssl — we do
+#   a real HTTPS fetch and assert getpeercert() is non-empty, and assert the
+#   linked OpenSSL is 1.1.1w.
+#
+# ENV VARS (documented inputs):
+#   TARBALL           Path to cpython-*.tar.gz to test.   (REQUIRED)
+#   EXPECTED_VERSION  Expected `python3 --version` value. (default: 3.6.15)
+#   EXPECTED_OPENSSL  Expected ssl.OPENSSL_VERSION prefix.(default: OpenSSL 1.1.1w)
+#   TEST_PIP_PKG      Small pure-python pkg to pip-install(default: six)
+#
+set -euo pipefail
+
+EXPECTED_VERSION="${EXPECTED_VERSION:-3.6.15}"
+EXPECTED_OPENSSL="${EXPECTED_OPENSSL:-OpenSSL 1.1.1w}"
+TEST_PIP_PKG="${TEST_PIP_PKG:-six}"
+
+if [[ -z "${TARBALL:-}" || ! -f "${TARBALL}" ]]; then
+  echo "ERROR: TARBALL must point at an existing cpython-*.tar.gz" >&2
+  exit 2
+fi
+
+PY_XY="${EXPECTED_VERSION%.*}"
+# Deliberately a different path than the build prefix — proves relocatability.
+EXTRACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cpython-selftest.XXXXXX")"
+trap 'rm -rf "${EXTRACT_DIR}"' EXIT
+
+echo "==> extracting ${TARBALL} to ${EXTRACT_DIR} (a path unrelated to the build)"
+tar xzf "${TARBALL}" -C "${EXTRACT_DIR}"
+
+# The tarball root contains bin/ lib/ ... directly (packaged with `tar -C prefix .`).
+PYBIN="${EXTRACT_DIR}/bin/python${PY_XY}"
+[[ -x "${PYBIN}" ]] || PYBIN="${EXTRACT_DIR}/bin/python3"
+if [[ ! -x "${PYBIN}" ]]; then
+  echo "ERROR: no python3 executable found under ${EXTRACT_DIR}/bin" >&2
+  ls -la "${EXTRACT_DIR}/bin" >&2 || true
+  exit 3
+fi
+echo "==> using interpreter: ${PYBIN}"
+
+fail() { echo "SELFTEST FAILURE: $*" >&2; exit 1; }
+
+# --- 1. version --------------------------------------------------------------
+got_version="$("${PYBIN}" --version 2>&1 | awk '{print $2}')"
+echo "--> python version: ${got_version}"
+[[ "${got_version}" == "${EXPECTED_VERSION}" ]] \
+  || fail "version mismatch: got '${got_version}', want '${EXPECTED_VERSION}'"
+
+# --- 2. ssl links OpenSSL 1.1.1w ---------------------------------------------
+got_openssl="$("${PYBIN}" -c 'import ssl; print(ssl.OPENSSL_VERSION)')"
+echo "--> ssl.OPENSSL_VERSION: ${got_openssl}"
+[[ "${got_openssl}" == "${EXPECTED_OPENSSL}"* ]] \
+  || fail "OpenSSL mismatch: got '${got_openssl}', want prefix '${EXPECTED_OPENSSL}' (OpenSSL 3 => broken TLS)"
+
+# --- 3. real HTTPS fetch + non-empty peer cert -------------------------------
+# This is the check that catches the OpenSSL-3 ABI bug: getpeercert() must be
+# non-empty and verification must succeed against a real endpoint.
+"${PYBIN}" - <<'PYEOF' || fail "HTTPS fetch / getpeercert verification failed"
+import ssl, socket, sys
+import urllib.request
+
+url = "https://pypi.org/simple/"
+ctx = ssl.create_default_context()
+
+# 3a. real end-to-end HTTPS request must return 200.
+resp = urllib.request.urlopen(url, timeout=30, context=ctx)
+assert resp.status == 200, "unexpected HTTP status: %r" % resp.status
+
+# 3b. getpeercert() must be non-empty — empty means the OpenSSL-3 ABI bug.
+host = "pypi.org"
+with socket.create_connection((host, 443), timeout=30) as sock:
+    with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+        cert = ssock.getpeercert()
+assert cert, "getpeercert() returned empty — TLS verification is silently broken"
+assert cert.get("subject"), "peer cert has no subject — broken"
+print("--> HTTPS 200 OK; getpeercert() subject:", cert["subject"])
+PYEOF
+
+# --- 3.5 stdlib C-extension import smoke test --------------------------------
+# Each module below is a compiled C extension that links a brew/vendored dylib
+# (or OpenSSL). If relocate.sh dropped or mis-wired one, the import fails here
+# and we block the release — fail-closed. curses / readline / dbm.gnu are kept
+# REQUIRED (not optional) because the behave use-case relies on them; the second
+# `ssl` in the spec is deduped since section 2 already asserts it links 1.1.
+echo "--> importing required stdlib C extensions"
+"${PYBIN}" - <<'PYEOF' || fail "a required stdlib C extension is missing or unloadable"
+import importlib, sys
+
+required = ["ssl", "bz2", "lzma", "zlib", "ctypes", "sqlite3",
+            "readline", "curses", "dbm.gnu", "hashlib"]
+missing = []
+for name in required:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        missing.append("%s (%s)" % (name, exc))
+if missing:
+    print("MISSING/UNLOADABLE:", ", ".join(missing), file=sys.stderr)
+    sys.exit(1)
+print("--> all required stdlib C extensions imported OK:", ", ".join(required))
+PYEOF
+
+# --- 4. pip install a small pure-python package ------------------------------
+echo "--> pip install ${TEST_PIP_PKG} into an isolated target"
+PIP_TARGET="$(mktemp -d "${TMPDIR:-/tmp}/cpython-piptest.XXXXXX")"
+trap 'rm -rf "${EXTRACT_DIR}" "${PIP_TARGET}"' EXIT
+"${PYBIN}" -m pip install --quiet --disable-pip-version-check \
+  --target "${PIP_TARGET}" "${TEST_PIP_PKG}" \
+  || fail "pip install ${TEST_PIP_PKG} failed"
+PYTHONPATH="${PIP_TARGET}" "${PYBIN}" -c "import ${TEST_PIP_PKG}; print('--> imported', '${TEST_PIP_PKG}', 'OK')" \
+  || fail "could not import ${TEST_PIP_PKG} after install"
+
+echo "==> ALL SELFTESTS PASSED — safe to publish."
