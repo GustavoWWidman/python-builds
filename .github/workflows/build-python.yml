@@ -85,11 +85,10 @@ jobs:
         run: bash scripts/selftest.sh
 
       - name: Publish GitHub Release
-        # Supply-chain hardening: pin to a full 40-char commit SHA, not a moving
-        # tag. REPLACE <PIN-TO-SHA> with the real commit SHA of softprops/
-        # action-gh-release v2.x.x (find it on the action's GitHub releases page)
-        # before running; the trailing comment documents which version it is.
-        uses: softprops/action-gh-release@<PIN-TO-SHA> # v2.x.x
+        # Supply-chain hardening: pinned to a full 40-char commit SHA, not a
+        # moving tag. The trailing comment documents which version it is; bump
+        # both together when updating.
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           # Tag scheme: cpython-v<python_version> (documented in README.md).
           # Each target's tarball is attached to the same version tag.
