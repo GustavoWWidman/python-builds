@@ -15,6 +15,36 @@ no prebuilt binary anywhere:
 
 So we build 3.6 from source on an arm64 runner.
 
+## Quick start — install CPython 3.6.15 with mise
+
+Once a release exists (see [How to trigger a build](#how-to-trigger-a-build)),
+one command wires it into `mise` as a normal `python` version:
+
+```bash
+# grab bootstrap.sh from this repo (or clone the repo), then:
+curl -fsSLO https://raw.githubusercontent.com/GustavoWWidman/python-builds/main/bootstrap.sh
+chmod +x bootstrap.sh
+PYBUILDS_REPO=GustavoWWidman/python-builds ./bootstrap.sh 3.6.15
+
+mise install python@3.6.15      # downloads the prebuilt — no compile
+```
+
+`bootstrap.sh` detects your arch, resolves the matching release asset and its
+published `sha256`, writes the python-build definition to
+`~/.config/mise/python-build-defs/3.6.15`, and adds `PYTHON_BUILD_DEFINITIONS` to
+your mise config (idempotent, backs up first). Afterward `python@3.6.15` is just
+another version of mise's **one** `python` tool — beside the precompiled
+3.11 / 3.14 — selectable via `python = "3.6.15"` or a `.python-version`:
+
+```bash
+echo 3.6.15 > .python-version   # this dir now uses 3.6.15
+mise use python@3.11            # elsewhere, still the fast precompiled build
+```
+
+That's the whole from-scratch flow. The section
+[Consuming from mise](#consuming-from-mise-the-single-python-tool-model) below
+explains what the bootstrap does under the hood and the manual equivalent.
+
 ## Why this is not just "./configure && make"
 
 Python 3.6 predates OpenSSL 3, and this is the whole reason the project exists:
@@ -80,6 +110,9 @@ that installs a version from a prebuilt tarball (`"copy"` mode = download and
 copy in as-is, no compile). So `python@3.6.15` becomes just another `python`
 version that coexists with the precompiled 3.11 / 3.14 — **one python tool**,
 selectable via `python = "..."` in mise config or a `.python-version`.
+
+> **`bootstrap.sh` does steps 1–2 for you** (and fills in the owner + sha256 from
+> the release). The manual steps below are for understanding it or customizing.
 
 ### 1. Put the definition at a durable path
 
