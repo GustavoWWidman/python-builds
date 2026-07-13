@@ -176,27 +176,32 @@ the filename==version rule, `"copy"` mode). They are stable and long-standing,
 but they are **not a semver-guaranteed mise API** — a future mise/python-build
 change could require adjusting the definition or env var.
 
-## Honest status: this is a best-effort first cut
+## Status: validated end-to-end
 
-The **relocation step (`relocate.sh`) typically needs 1–2 real CI iterations to
-perfect.** Mach-O install-name rewriting is fiddly and depends on the exact set
-of `LC_LOAD_DYLIB` entries the toolchain emits on the runner, which is hard to
-predict without running there. The build has **not** been run locally (it's for
-CI runners). Expect to iterate on the parts called out below.
+`3.6.15` for `aarch64-apple-darwin` **builds green on `macos-14`, publishes a
+release, and installs cleanly via `mise`.** The installed interpreter is a native
+`arm64` Mach-O, links **OpenSSL 1.1.1w**, verifies TLS out of the box (real HTTPS
+fetch with a non-empty `getpeercert()`), and imports the full stdlib C-extension
+set behave relies on (`ssl`, `bz2`, `lzma`, `zlib`, `ctypes`, `sqlite3`,
+`readline`, `curses`, `dbm.gnu`, `hashlib`). The selftest gate asserts all of
+this before any release is published.
 
-### Parts most likely to need a real-CI fix
+Getting there required exactly the source patches this repo now vendors and the
+packaging shape it now uses; the notes below record what to watch when bumping
+versions or adding targets:
 
-1. **`relocate.sh` rpath offsets / load-command set** — the exact dylib
-   references (and whether libpython/`_ssl` gain the right `LC_RPATH`) depend on
-   what the runner toolchain emits. The verify gate will *tell you* if an
-   absolute path survived, but the fix may need extra `-change`/`-add_rpath`.
-2. **arm64 support in 3.6's `configure`** — 3.6 predates Apple Silicon; we
-   refresh `config.guess`/`config.sub`, but additional source patches (or a
-   specific SDK/deployment target) may be needed for a clean compile.
-3. **`setup.py` OpenSSL detection** — 3.6 finds ssl via `CPPFLAGS`/`LDFLAGS`;
-   if `_ssl`/`_hashlib` don't build or link the *system* OpenSSL, you may need to
-   patch `setup.py`/`Modules/Setup` to force the staging prefix.
-4. **Upstream checksums** — verify the `scripts/checksums.txt` values against
-   python.org / openssl.org before the first run (see the note in that file).
-5. **`--enable-optimizations` (PGO)** — reliable but slow; drop it in
-   `build-python.sh` if CI times out.
+1. **arm64 in 3.6's `configure`** — 3.6 predates Apple Silicon. We apply pyenv's
+   12-patch arm64/macOS-11 set (`patches/3.6.15/`) *and* refresh
+   `config.guess`/`config.sub`. A different EOL version needs its own patch set.
+2. **`relocate.sh` (Mach-O install-names)** — vendors every non-system dylib to
+   `@rpath` and re-signs ad-hoc (arm64 SIGKILLs invalid signatures). The verify
+   gate fails the build if any absolute build path survives.
+3. **CA trust store** — the from-source OpenSSL has no usable default cert path,
+   so the build ships `ssl/cert.pem` + a `sitecustomize.py` (see above). Without
+   it, TLS fails `CERTIFICATE_VERIFY_FAILED` even though the handshake succeeds.
+4. **Single top-level wrapper dir** — required by python-build's `"copy"` mode
+   (see [Release tag & asset naming](#release-tag--asset-naming-scheme)).
+5. **Upstream checksums** — bumping a version means adding its `sha256` line to
+   `scripts/checksums.txt` (the download fails closed otherwise).
+6. **`--enable-optimizations` (PGO)** — enabled; the arm64 build lands in ~6 min,
+   well under the timeout. Drop it if a slower target times out.
