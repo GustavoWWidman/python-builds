@@ -46,7 +46,9 @@
 set -euo pipefail
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.6.15}"
+PY_XY="${PYTHON_VERSION%.*}"
 PYTHON_SHA256="${PYTHON_SHA256:-}"
+CACERT_URL="${CACERT_URL:-https://curl.se/ca/cacert.pem}"
 MAKE_JOBS="${MAKE_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 
@@ -178,5 +180,45 @@ echo "==> otool -L of installed _ssl module(s):"
 find "${PY_PREFIX}/lib" -name "_ssl*.so" -print -exec otool -L {} \;
 echo "==> otool -L of installed _hashlib module(s):"
 find "${PY_PREFIX}/lib" -name "_hashlib*.so" -print -exec otool -L {} \;
+
+# --- Provision a relocatable CA trust store -----------------------------------
+# WHY THIS EXISTS:
+#   Our OpenSSL 1.1.1w is built from source with an OPENSSLDIR that lives at the
+#   staging prefix — a path that does NOT exist on any consumer machine. So the
+#   compiled-in default cert file/dir point nowhere and `ssl` has zero trust
+#   roots: the TLS handshake succeeds but verification fails with
+#   CERTIFICATE_VERIFY_FAILED. We can't `pip install certifi` to fix it either —
+#   pip would need working TLS first (chicken-and-egg). Instead we fetch a CA
+#   bundle with the runner's `curl` (which trusts the system roots) and ship it
+#   inside the tree, then wire `ssl` to it via sitecustomize (below).
+echo "==> provisioning bundled CA certificates from ${CACERT_URL}"
+mkdir -p "${PY_PREFIX}/ssl"
+curl -fSL --retry 3 -o "${PY_PREFIX}/ssl/cert.pem" "${CACERT_URL}"
+grep -q "BEGIN CERTIFICATE" "${PY_PREFIX}/ssl/cert.pem" \
+  || { echo "ERROR: fetched CA bundle at ${PY_PREFIX}/ssl/cert.pem is not PEM" >&2; exit 7; }
+
+# sitecustomize.py — auto-wire OpenSSL to the bundled store, RELOCATABLY.
+#   `site` imports sitecustomize at interpreter startup (before any ssl context
+#   is created), so setting SSL_CERT_FILE here makes ssl.create_default_context()
+#   / load_default_certs() pick up our bundle. The path is derived from
+#   sys.prefix at runtime, so it follows the tree wherever it is extracted.
+#   setdefault => an explicit SSL_CERT_FILE from the user still wins.
+#   NOTE: site init (hence this file) is skipped under `python -S`/`-I`; those
+#   modes must set SSL_CERT_FILE themselves. Fine for the behave use case.
+SITE_DIR="${PY_PREFIX}/lib/python${PY_XY}/site-packages"
+mkdir -p "${SITE_DIR}"
+cat > "${SITE_DIR}/sitecustomize.py" <<'PYEOF'
+# Injected by the python-builds foundry. This CPython links an OpenSSL 1.1.1w
+# built from source, whose compiled-in cert paths do not exist on this machine.
+# Point OpenSSL at the CA bundle shipped inside this tree (prefix/ssl/cert.pem),
+# resolved relative to sys.prefix so it keeps working wherever the tree lives.
+import os
+import sys
+
+_cafile = os.path.join(sys.prefix, "ssl", "cert.pem")
+if os.path.isfile(_cafile):
+    os.environ.setdefault("SSL_CERT_FILE", _cafile)
+PYEOF
+echo "==> wrote ${SITE_DIR}/sitecustomize.py (auto SSL_CERT_FILE)"
 
 echo "==> CPython ${PYTHON_VERSION} installed at ${PY_PREFIX}"

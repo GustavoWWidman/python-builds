@@ -65,10 +65,26 @@ echo "--> ssl.OPENSSL_VERSION: ${got_openssl}"
 [[ "${got_openssl}" == "${EXPECTED_OPENSSL}"* ]] \
   || fail "OpenSSL mismatch: got '${got_openssl}', want prefix '${EXPECTED_OPENSSL}' (OpenSSL 3 => broken TLS)"
 
+# --- 2.5 bundled CA store present + auto-wired (zero-config trust) ------------
+# The from-source OpenSSL has no usable default cert path, so the dist ships a
+# CA bundle and a sitecustomize.py that auto-sets SSL_CERT_FILE relative to
+# sys.prefix. Prove BOTH here: the bundle exists in the (relocated) tree, and a
+# fresh interpreter auto-populates SSL_CERT_FILE to an existing file — WITHOUT
+# us exporting it. This is what makes the HTTPS check below pass zero-config.
+[[ -f "${EXTRACT_DIR}/ssl/cert.pem" ]] || fail "dist is missing bundled ssl/cert.pem"
+auto_cert="$(env -u SSL_CERT_FILE "${PYBIN}" -c 'import os; print(os.environ.get("SSL_CERT_FILE",""))')"
+echo "--> auto SSL_CERT_FILE: ${auto_cert}"
+[[ "${auto_cert}" == "${EXTRACT_DIR}/ssl/cert.pem" && -f "${auto_cert}" ]] \
+  || fail "sitecustomize did not auto-set SSL_CERT_FILE to the in-tree bundle (got '${auto_cert}')"
+
 # --- 3. real HTTPS fetch + non-empty peer cert -------------------------------
 # This is the check that catches the OpenSSL-3 ABI bug: getpeercert() must be
 # non-empty and verification must succeed against a real endpoint.
-"${PYBIN}" - <<'PYEOF' || fail "HTTPS fetch / getpeercert verification failed"
+# Run with SSL_CERT_FILE/SSL_CERT_DIR SCRUBBED so verification is forced through
+# sitecustomize + the in-tree ssl/cert.pem — otherwise a runner that exports its
+# own bundle could make this pass without ever exercising the shipped certs
+# (the exact zero-config guarantee a consumer on a clean machine depends on).
+env -u SSL_CERT_FILE -u SSL_CERT_DIR "${PYBIN}" - <<'PYEOF' || fail "HTTPS fetch / getpeercert verification failed"
 import ssl, socket, sys
 import urllib.request
 

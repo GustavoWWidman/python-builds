@@ -63,6 +63,15 @@ Python 3.6 predates OpenSSL 3, and this is the whole reason the project exists:
 Every other stdlib C-module dependency (zlib, bzip2, xz/lzma, readline, ncurses,
 gdbm, libffi) is taken from Homebrew — **only `openssl@1.1` is the problem**.
 
+- **A CA trust store ships inside the tarball.** The from-source OpenSSL's
+  compiled-in cert path points at the build machine, so a stock relocated tree
+  has *no* trust roots and TLS fails with `CERTIFICATE_VERIFY_FAILED`. The build
+  therefore bundles a CA bundle at `ssl/cert.pem` and installs a
+  `sitecustomize.py` that sets `SSL_CERT_FILE` to it (relative to `sys.prefix`)
+  at interpreter startup — so **TLS verifies out of the box, wherever the tree
+  is extracted, with no environment setup**. Set your own `SSL_CERT_FILE` to
+  override (e.g. to point at a corporate bundle); an explicit value always wins.
+
 ## How to trigger a build
 
 Actions → **build-python** → **Run workflow**, with inputs:
