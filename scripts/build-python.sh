@@ -221,4 +221,16 @@ if os.path.isfile(_cafile):
 PYEOF
 echo "==> wrote ${SITE_DIR}/sitecustomize.py (auto SSL_CERT_FILE)"
 
+# --- Bare `python` / `pip` entry points (pyenv convention) --------------------
+# CPython's `make install` only creates versioned names (python3, python3.6),
+# NOT a bare `python`. pyenv/python-build normally adds the `python` shim, but
+# our "copy" mode installs the tarball as-is — so mise's post-install check
+# (`<prefix>/bin/python --version`) fails with ENOENT unless we ship it. Create
+# relative symlinks so the tarball is self-sufficient wherever it is extracted.
+( cd "${PY_PREFIX}/bin"
+  [[ -e python ]] || ln -s python3 python
+  if [[ -e pip3 && ! -e pip ]]; then ln -s pip3 pip; fi
+)
+echo "==> linked bin/python -> python3 (and bin/pip -> pip3 if present)"
+
 echo "==> CPython ${PYTHON_VERSION} installed at ${PY_PREFIX}"

@@ -59,6 +59,17 @@ echo "--> python version: ${got_version}"
 [[ "${got_version}" == "${EXPECTED_VERSION}" ]] \
   || fail "version mismatch: got '${got_version}', want '${EXPECTED_VERSION}'"
 
+# --- 1.5 bare `python` entry point (the mise copy-mode contract) -------------
+# CPython's `make install` ships only python3/pythonX.Y; mise's post-install
+# check runs `<prefix>/bin/python --version`, so the tarball MUST include a bare
+# `python`. Assert it exists and reports the right version, or copy-mode installs
+# fail with ENOENT (regression guard for the build's symlink step).
+BARE_PY="${EXTRACT_DIR}/bin/python"
+[[ -x "${BARE_PY}" ]] || fail "dist is missing bin/python (mise runs 'bin/python --version')"
+bare_version="$("${BARE_PY}" --version 2>&1 | awk '{print $2}')"
+[[ "${bare_version}" == "${EXPECTED_VERSION}" ]] \
+  || fail "bin/python version mismatch: got '${bare_version}', want '${EXPECTED_VERSION}'"
+
 # --- 2. ssl links OpenSSL 1.1.1w ---------------------------------------------
 got_openssl="$("${PYBIN}" -c 'import ssl; print(ssl.OPENSSL_VERSION)')"
 echo "--> ssl.OPENSSL_VERSION: ${got_openssl}"
