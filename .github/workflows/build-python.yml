@@ -70,10 +70,21 @@ jobs:
         id: package
         run: |
           set -euo pipefail
-          PKG="cpython-${PYTHON_VERSION}-${TARGET_TRIPLE}.tar.gz"
-          # Package from INSIDE the prefix so the tarball root is bin/ lib/ ...
-          # (selftest.sh and python-build's "copy" mode expect bin/ at top level).
-          tar -C "${PY_PREFIX}" -czf "${PKG}" .
+          STEM="cpython-${PYTHON_VERSION}-${TARGET_TRIPLE}"
+          PKG="${STEM}.tar.gz"
+          # The tarball MUST have a SINGLE top-level wrapper directory (like
+          # python-build-standalone), NOT bin/ lib/ at the root. python-build's
+          # "copy" mode does: rename the first directory in the tarball to the
+          # package name, then `cp -fR .` ITS CONTENTS into the prefix. With a
+          # flat root it grabs `bin/` (first alphabetically) and copies bin/'s
+          # contents into the prefix — so bin/python and lib/ vanish and the
+          # install fails its `bin/python --version` check. Wrapping in one dir
+          # (named as the asset stem, so a manual extract is self-documenting)
+          # makes copy mode reconstruct bin/ lib/ … correctly under the prefix.
+          STAGE="${RUNNER_TEMP}/pkgroot"
+          rm -rf "${STAGE}"; mkdir -p "${STAGE}"
+          cp -R "${PY_PREFIX}" "${STAGE}/${STEM}"
+          tar -C "${STAGE}" -czf "${PKG}" "${STEM}"
           shasum -a 256 "${PKG}" | tee "${PKG}.sha256"
           echo "pkg=${PKG}" >> "${GITHUB_OUTPUT}"
 

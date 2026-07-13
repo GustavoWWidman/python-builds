@@ -33,15 +33,31 @@ if [[ -z "${TARBALL:-}" || ! -f "${TARBALL}" ]]; then
   exit 2
 fi
 
+fail() { echo "SELFTEST FAILURE: $*" >&2; exit 1; }
+
 PY_XY="${EXPECTED_VERSION%.*}"
 # Deliberately a different path than the build prefix — proves relocatability.
-EXTRACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cpython-selftest.XXXXXX")"
-trap 'rm -rf "${EXTRACT_DIR}"' EXIT
+# EXTRACT_ROOT is the mktemp dir we always clean up; EXTRACT_DIR may descend into
+# a wrapper subdir below but the trap must still remove the whole root.
+EXTRACT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/cpython-selftest.XXXXXX")"
+trap 'rm -rf "${EXTRACT_ROOT}"' EXIT
+EXTRACT_DIR="${EXTRACT_ROOT}"
 
-echo "==> extracting ${TARBALL} to ${EXTRACT_DIR} (a path unrelated to the build)"
-tar xzf "${TARBALL}" -C "${EXTRACT_DIR}"
+echo "==> extracting ${TARBALL} to ${EXTRACT_ROOT} (a path unrelated to the build)"
+tar xzf "${TARBALL}" -C "${EXTRACT_ROOT}"
 
-# The tarball root contains bin/ lib/ ... directly (packaged with `tar -C prefix .`).
+# The tarball has a SINGLE top-level wrapper dir (see the packaging step) so
+# python-build's "copy" mode reconstructs the tree correctly. Descend into it so
+# the checks below see bin/ lib/ ssl/ at ${EXTRACT_DIR}.
+if [[ ! -d "${EXTRACT_DIR}/bin" ]]; then
+  sub="$(find "${EXTRACT_DIR}" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  [[ -n "${sub}" && -d "${sub}/bin" ]] \
+    || fail "tarball layout unexpected: no bin/ at root and no wrapper dir with bin/"
+  EXTRACT_DIR="${sub}"
+  echo "==> descended into wrapper dir: ${EXTRACT_DIR}"
+fi
+
+# The (possibly descended) ${EXTRACT_DIR} now contains bin/ lib/ ... directly.
 PYBIN="${EXTRACT_DIR}/bin/python${PY_XY}"
 [[ -x "${PYBIN}" ]] || PYBIN="${EXTRACT_DIR}/bin/python3"
 if [[ ! -x "${PYBIN}" ]]; then
@@ -50,8 +66,6 @@ if [[ ! -x "${PYBIN}" ]]; then
   exit 3
 fi
 echo "==> using interpreter: ${PYBIN}"
-
-fail() { echo "SELFTEST FAILURE: $*" >&2; exit 1; }
 
 # --- 1. version --------------------------------------------------------------
 got_version="$("${PYBIN}" --version 2>&1 | awk '{print $2}')"
@@ -143,7 +157,7 @@ PYEOF
 # --- 4. pip install a small pure-python package ------------------------------
 echo "--> pip install ${TEST_PIP_PKG} into an isolated target"
 PIP_TARGET="$(mktemp -d "${TMPDIR:-/tmp}/cpython-piptest.XXXXXX")"
-trap 'rm -rf "${EXTRACT_DIR}" "${PIP_TARGET}"' EXIT
+trap 'rm -rf "${EXTRACT_ROOT}" "${PIP_TARGET}"' EXIT
 "${PYBIN}" -m pip install --quiet --disable-pip-version-check \
   --target "${PIP_TARGET}" "${TEST_PIP_PKG}" \
   || fail "pip install ${TEST_PIP_PKG} failed"

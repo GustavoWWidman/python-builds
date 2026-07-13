@@ -107,8 +107,12 @@ Adding Intel later is a **one-line matrix addition** (uncomment the `macos-13` �
   `cpython-3.6.15-aarch64-apple-darwin.tar.gz`.
 - **Checksum sidecar:** `<asset>.sha256`.
 
-Multiple targets attach to the same version tag as separate assets. The tarball
-root contains `bin/`, `lib/`, … directly (packaged with `tar -C <prefix> .`).
+Multiple targets attach to the same version tag as separate assets. Each tarball
+contains a **single top-level directory** named after the asset stem (e.g.
+`cpython-3.6.15-aarch64-apple-darwin/`) holding `bin/`, `lib/`, `ssl/`, …. That
+wrapper is required by python-build's `"copy"` mode (it renames the first
+directory in the archive and copies its contents into the prefix), so a flat
+`bin/`-at-root layout would install incorrectly.
 
 ## Consuming from mise (the single-`python`-tool model)
 
